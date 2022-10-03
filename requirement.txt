@@ -1,0 +1,5 @@
+executor==23.2
+jmespath==1.0.1
+stanza==1.4.2
+git+https://github.com/lang-uk/choppa.git
+tqdm==4.64.1
