@@ -12,15 +12,16 @@ import jmespath
 import choppa
 from choppa.srx_parser import SrxDocument
 from choppa.iterators import SrxTextIterator
-
+import re
 
 ACUTE = chr(0x301)
 GRAVE = chr(0x300)
 ruleset = Path(choppa.__file__).parent / "data/srx/languagetool_segment.srx"
 SRX_2_XSD = Path(choppa.__file__).parent / "data/xsd/srx20.xsd"
 document = SrxDocument(ruleset=ruleset, validate_ruleset=SRX_2_XSD)
+PATTERN = re.compile("\)\s—")
 
-nlp = stanza.Pipeline(lang="uk", processors="tokenize,mwt,pos,lemma")
+nlp = stanza.Pipeline(lang="uk", processors="tokenize,mwt,pos,lemma", verbose=False)
 
 
 def remove_accents(s: str) -> str:
@@ -62,14 +63,15 @@ def extract_from_page(word: str) -> Dict:
     page["infoboxes"] = merged_sections
     page["examples"] = filtered_sentences
 
-    gloss = jmespath.search("json.sections[0].paragraphs[0].sentences[0].text", page) or ""
+    gloss = jmespath.search("json.sections[0].paragraphs[].sentences[0].text", page)[0] or ""
     if "—" in gloss:
-        _, gloss = gloss.split("—", 1)
-
+        if re.search(PATTERN, gloss):
+            _, gloss = re.split(PATTERN, gloss, 1)
+        else:
+            _, gloss = gloss.split("—", 1)
     page["gloss"] = gloss.strip()
-
     return page
 
 
 if __name__ == "__main__":
-    print(json.dumps(extract_from_page("Буряк"), indent=4, ensure_ascii=False))
+    print(json.dumps(extract_from_page("Гіпюр"), indent=4, ensure_ascii=False))
