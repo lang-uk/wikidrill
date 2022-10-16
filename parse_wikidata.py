@@ -16,7 +16,8 @@ def get_pwn_id(wikidata_id):
 
 
 def get_hypernyms(pwn_id):
-    return {get_wikidata_id(el.id): el.lemmas() for el in wn.synset(f"{PREFIX}-{pwn_id}").hypernyms()}
+    return {get_wikidata_id(el.id): el.lemmas() for el in wn.synset(f"{PREFIX}-{pwn_id}").hypernyms() if
+            wn.synset(f"{PREFIX}-{pwn_id}")}
 
 
 def parse_synset_id(s_id):
@@ -32,6 +33,7 @@ def get_wikidata_id(synset_id):
     result = mkwikidata.run_query(query)['results']['bindings']
     if result:
         return result[0]['itemLabel']['value']
+    print(f"Not found wikidata id for {synset_id}")
     return ""
 
 
@@ -53,7 +55,7 @@ def build_query(wordnet_id):
 def get_wiki_url(wikidata_id):
     client = Client()
     response = client.get(wikidata_id, load=True)
-    print(wikidata_id)
-    if response:
+    if response and "ukwiki" in response.attributes["sitelinks"]:
         return response.attributes["sitelinks"]["ukwiki"]["url"]
-    return
+    print(f"No Ukrainian url for {wikidata_id}")
+    return ""

@@ -25,6 +25,8 @@ PATTERN = re.compile("\)\s—")
 nlp = stanza.Pipeline(lang="uk", processors="tokenize,mwt,pos,lemma", verbose=False)
 
 
+# Todo: * data structure and traversal
+
 def remove_accents(s: str) -> str:
     return s.replace(ACUTE, "").replace(GRAVE, "")
 
@@ -74,20 +76,32 @@ def extract_from_page(word: str) -> Dict:
     return page
 
 
-def main():
-    page = extract_from_page("Буряк")
-    pwn = parse_wikidata.get_pwn_id(page["wikidata_id"])
-    hypernyms = parse_wikidata.get_hypernyms(pwn)
-    for key in hypernyms:
-        if not key:
-            continue
-        url = parse_wikidata.get_wiki_url(key)
-        new_page = extract_from_page(url)
-        page['hyperonyms'] = new_page['json']['title']
-        print(page)
-        page = new_page
-
-
 if __name__ == "__main__":
     # print(json.dumps(extract_from_page("Буряк"), indent=4, ensure_ascii=False))
-    main()
+
+    # bfs to test
+    visited = []
+    queu = []
+    X = extract_from_page("жук")["wikidata_id"]
+    visited.append(X)
+    queu.append(X)
+    while queu:
+        t = queu.pop(0)
+        print(t)
+        if not parse_wikidata.get_pwn_id(t):
+            continue
+        hypernyms = parse_wikidata.get_hypernyms(parse_wikidata.get_pwn_id(t))
+        title_url = parse_wikidata.get_wiki_url(t)
+        if not title_url:
+            continue
+        title = extract_from_page(title_url)['json']['title']
+        print(title, ":", [extract_from_page(parse_wikidata.get_wiki_url(q))['json']['title'] for q in hypernyms if
+                           q and parse_wikidata.get_wiki_url(q)])
+        for x in hypernyms:
+            if x and x not in visited:
+                url = parse_wikidata.get_wiki_url(x)
+                if not url:
+                    continue
+                new_page = extract_from_page(url)
+                visited.append(x)
+                queu.append(x)
