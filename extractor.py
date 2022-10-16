@@ -13,6 +13,7 @@ import choppa
 from choppa.srx_parser import SrxDocument
 from choppa.iterators import SrxTextIterator
 import re
+import parse_wikidata
 
 ACUTE = chr(0x301)
 GRAVE = chr(0x300)
@@ -73,5 +74,20 @@ def extract_from_page(word: str) -> Dict:
     return page
 
 
+def main():
+    page = extract_from_page("Буряк")
+    pwn = parse_wikidata.get_pwn_id(page["wikidata_id"])
+    hypernyms = parse_wikidata.get_hypernyms(pwn)
+    for key in hypernyms:
+        if not key:
+            continue
+        url = parse_wikidata.get_wiki_url(key)
+        new_page = extract_from_page(url)
+        page['hyperonyms'] = new_page['json']['title']
+        print(page)
+        page = new_page
+
+
 if __name__ == "__main__":
-    print(json.dumps(extract_from_page("Гіпюр"), indent=4, ensure_ascii=False))
+    # print(json.dumps(extract_from_page("Буряк"), indent=4, ensure_ascii=False))
+    main()
