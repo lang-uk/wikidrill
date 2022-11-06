@@ -65,7 +65,7 @@ class PwnWikidataSpider(scrapy.Spider):
                     method="GET",
                     formdata={"query": WIKIDATA_QUERY.format(prop_name=ILI_WD_PROP, prop_value=synset["ili"])},
                     headers={"Accept": "application/sparql-results+json"},
-                    meta={"id_from": f"ili-{synset['ili']}"},
+                    meta={"id_from": f"ili-{synset['ili']}", "rel_prefix": "ili"},
                     callback=self.parse_wd_pwn,
                 )
 
@@ -74,7 +74,7 @@ class PwnWikidataSpider(scrapy.Spider):
                 method="GET",
                 formdata={"query": WIKIDATA_QUERY.format(prop_name=PWN31_WD_PROP, prop_value=synset["id"])},
                 headers={"Accept": "application/sparql-results+json"},
-                meta={"id_from": f"{LEXICON}-{synset['id']}"},
+                meta={"id_from": f"{LEXICON}-{synset['id']}", "rel_prefix": "pwn31"},
                 callback=self.parse_wd_pwn,
             )
 
@@ -91,7 +91,11 @@ class PwnWikidataSpider(scrapy.Spider):
                     m = re.search(r"(Q\d+)", v["value"])
                     if m:
                         yield PwnFriendsItem(
-                            id_from=response.meta["id_from"], id_to=f"wd-{m.group(1)}", rel=f"pwn31_to_wd"
+                            id_from=response.meta["id_from"],
+                            id_to=f"wd-{m.group(1)}",
+                            rel=f"{response.meta['rel_prefix']}_to_wd",
                         )
                 elif k.endswith("_wiki"):
-                    yield PwnFriendsItem(id_from=response.meta["id_from"], id_to=v["value"], rel=f"pwn31_to_{k}")
+                    yield PwnFriendsItem(
+                        id_from=response.meta["id_from"], id_to=v["value"], rel=f"{response.meta['rel_prefix']}_to_{k}"
+                    )
