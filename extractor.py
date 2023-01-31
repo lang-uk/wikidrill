@@ -13,9 +13,6 @@ import choppa
 from choppa.srx_parser import SrxDocument
 from choppa.iterators import SrxTextIterator
 import re
-import parse_wikidata
-import pandas as pd
-import wn
 
 ACUTE = chr(0x301)
 GRAVE = chr(0x300)
@@ -34,9 +31,9 @@ def remove_accents(s: str) -> str:
     return s.replace(ACUTE, "").replace(GRAVE, "")
 
 
-# def lemmatize(s: str) -> List[str]:
-#     doc = nlp(s)
-#     return [word.lemma for sent in doc.sentences for word in sent.words]
+def lemmatize(s: str) -> List[str]:
+    doc = nlp(s)
+    return [word.lemma for sent in doc.sentences for word in sent.words]
 
 
 def extract_from_page(word: str) -> Dict:
@@ -51,25 +48,25 @@ def extract_from_page(word: str) -> Dict:
             if "text" in v:
                 merged_sections[k].append(v["text"])
 
-    #     sentences: List[str] = []
-    #     for s in page["plaintext"].splitlines():
-    #         if not s.strip():
-    #             continue
+        sentences: List[str] = []
+        for s in page["plaintext"].splitlines():
+            if not s.strip():
+                continue
 
-    #         for text in SrxTextIterator(document, "uk_one", s.strip(), max_lookbehind_construct_length=1024 * 10):
-    #             if not text:
-    #                 continue
-    #             sentences.append(text)
+            for text in SrxTextIterator(document, "uk_one", s.strip(), max_lookbehind_construct_length=1024 * 10):
+                if not text:
+                    continue
+                sentences.append(text)
 
-    #     title = remove_accents(page["json"]["title"]).strip().lower()
-    #     filtered_sentences: List[str] = []
+        title = remove_accents(page["json"]["title"]).strip().lower()
+        filtered_sentences: List[str] = []
 
-    #     for sent in tqdm(sentences):
-    #         if title in lemmatize(sent):
-    #             filtered_sentences.append(sent)
+        for sent in tqdm(sentences):
+            if title in lemmatize(sent):
+                filtered_sentences.append(sent)
 
-    #     page["infoboxes"] = merged_sections
-    #     page["examples"] = filtered_sentences
+        page["infoboxes"] = merged_sections
+        page["examples"] = filtered_sentences
     if jmespath.search("json.sections[0].paragraphs[].sentences[0].text", page):
         gloss = jmespath.search("json.sections[0].paragraphs[].sentences[0].text", page)[0]
     else:
