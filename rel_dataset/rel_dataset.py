@@ -1,13 +1,15 @@
+import re
 import lzma
 from pathlib import Path
 import unicodedata
 from collections import defaultdict, namedtuple
-
-from typing import Dict, List, Set, Optional, Generator, TextIO, Tuple
+from typing import Dict, List, Set, Optional, Generator, TextIO, Tuple, Callable, Union, Iterable
 import csv
+from functools import reduce
 
 from tqdm import tqdm
 import smart_open
+import pandas as pd
 
 
 def _handle_xz(file_obj, mode):
@@ -45,8 +47,17 @@ def deaccent(text: str) -> str:
     return "".join(res)
 
 
+def normalize_apostrophes(s: str) -> str:
+    s = re.sub(
+        r"(?iu)([бвгґдзкмнпрстфхш])[\"\u201D\u201F\u0022\u2018\u2032\u0313\u0384\u0092´`?*]([єїюя])", r"\1'\2", s
+    )
+    # TODO: verify with Andriy, wtf
+    # s = re.sub(r"(?iu)[´`]([аеєиіїоуюя])", '\u0301\\1', s)
+    return s
+
+
 def preprocess_lemma(s: str) -> str:
-    return deaccent(s).lower().strip(" 0123456789-")
+    return deaccent(normalize_apostrophes(s)).lower().strip(" 0123456789-")
 
 
 def fix_nulls(fp_in: TextIO) -> Generator[str, None, None]:
@@ -67,35 +78,74 @@ REL_RANDOM: str = "random"
 REL_SYNONYM: str = "synonym"
 REL_CO_HYPONYMS: str = "co-hyponyms"
 REL_HYPERNYM_HYPONYM: str = "hypernym-hyponym"
+REL_HYPONYM_HYPERNYM: str = "hyponym-hypernym"
 REL_CO_INSTANCES: str = "co-instances"
 REL_HYPERNYM_INSTANCE: str = "hypernym-instance"
+REL_INSTANCE_HYPERNYM: str = "instance-hypernym"
+
+INVERSE_RELATIONS: List[set[str]] = [
+    {REL_HYPERNYM_INSTANCE, REL_INSTANCE_HYPERNYM},
+    {REL_HYPERNYM_HYPONYM, REL_HYPONYM_HYPERNYM},
+]
+
+ALL_RELATIONS: set[str] = {
+    REL_ANTONYM,
+    REL_RANDOM,
+    REL_SYNONYM,
+    REL_CO_HYPONYMS,
+    REL_HYPERNYM_HYPONYM,
+    REL_HYPONYM_HYPERNYM,
+    REL_CO_INSTANCES,
+    REL_HYPERNYM_INSTANCE,
+    REL_INSTANCE_HYPERNYM,
+}
+
+ASSYMETRIC_RELATIONS: set[str] = reduce(set.union, INVERSE_RELATIONS)
+SYMMETRIC_RELATIONS: set[str] = ALL_RELATIONS - ASSYMETRIC_RELATIONS
+
+FLIPPED_MAPPING = {
+    rel: (rel if rel in SYMMETRIC_RELATIONS else "-".join(rel.split("-")[::-1])) for rel in ALL_RELATIONS
+}
 
 
 class LemmaDictionary:
-    def __init__(self, csv_source: Path, pos_whitelist: List[str]) -> None:
+    def __init__(self, source: Union[Path, Iterable], pos_whitelist: List[str]) -> None:
         # lemma -> Lemma objs
         self._lemmas: Dict[str, Set[Lemma]] = defaultdict(set)
         # pos -> lemma -> Lemma objs
         self._by_pos: Dict[str, Dict[str, Set[Lemma]]] = defaultdict(lambda: defaultdict(set))
+        # lemma -> combined freqs over the all poses
+        self._freqs: Dict[str, float] = {}
 
         self._total: int = 0
         self._total_unfiltered: int = 0
 
-        with smart_open.open(csv_source, "rt") as fp_in:
-            r = csv.DictReader(fix_nulls(fp_in))
+        if isinstance(source, Path):
+            fp_in = smart_open.open(source, "rt")
+            dataset: Union[csv.DictReader, Iterable] = csv.DictReader(fix_nulls(fp_in))
+        else:
+            dataset = source
 
-            for entry in tqdm(r):
-                self._total_unfiltered += 1
-                if entry["pos"] not in pos_whitelist:
-                    continue
+        for entry in tqdm(dataset):
+            self._total_unfiltered += 1
 
-                word = preprocess_lemma(entry["lemma"])
+            if isinstance(entry, Lemma):
+                entry = entry._asdict()
 
-                lemma = Lemma(lemma=word, pos=entry["pos"], freq=entry.get("freq_in_corpus", 0))
-                self._lemmas[word].add(lemma)
-                self._by_pos[entry["pos"]][word].add(lemma)
+            if entry["pos"] not in pos_whitelist:
+                continue
 
-                self._total += 1
+            word = preprocess_lemma(entry["lemma"])
+
+            lemma = Lemma(lemma=word, pos=entry["pos"], freq=float(entry.get("freq_in_corpus", 0)))
+            self._lemmas[word].add(lemma)
+            self._by_pos[entry["pos"]][word].add(lemma)
+            self._freqs[word] = self._freqs.get(word, 0) + lemma.freq
+
+            self._total += 1
+
+        if isinstance(source, Path):
+            fp_in.close()
 
     def __str__(self) -> str:
         nl: str = "\n"
@@ -111,9 +161,31 @@ class LemmaDictionary:
 
 
 class RelationDictionary:
+    """
+    Most of the methods of this class are chainable so you can easily combine them
+    like this:
+        .filter(my_func1).filter(my_func2).swap().remap({REL_ANTONYM: REL_UNKNOWN})
+
+    mind the memory usage tho
+    """
+
     def __init__(
-        self, csv_source: Path, rel_whitelist: List[str], rel_mapping: Optional[Dict[str, str]] = None
+        self,
+        source: Union[Path, Iterable],
+        rel_whitelist: Optional[List[str]] = None,
+        rel_mapping: Optional[Dict[str, str]] = None,
+        sort_lemmas: bool = True,
     ) -> None:
+        """
+        source is either a CSV file of at least three columns (word_left, word_right, relation)
+        or an iterable over same tuples/dicts/Relations.
+
+        rel_whitelist allow you to drop some relations you don't need
+        rel_mapping allow you to map relations in the file/iterable to other (for example mark all
+        antonyms as random).
+        sort_lemmas is turned on by default and will sort all lemmas in symmetrical relations by default
+        to eliminate duplicates like райдуга->веселка and веселка-райдуга
+        """
         self._by_rel: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
         self._all_rels: Set[Relation] = set()
 
@@ -121,25 +193,43 @@ class RelationDictionary:
         if rel_mapping is not None:
             self._rel_mapping = rel_mapping
 
+        self._rel_whitelist: List[str] = []
+        if rel_whitelist is not None:
+            self._rel_whitelist = rel_whitelist
+
         self._total_unfiltered: int = 0
         self._total: int = 0
 
-        with smart_open.open(csv_source, "rt") as fp_in:
-            r = csv.DictReader(fix_nulls(fp_in))
+        if isinstance(source, Path):
+            fp_in = smart_open.open(source, "rt")
+            dataset: Union[csv.DictReader, Iterable] = csv.DictReader(fix_nulls(fp_in))
+        else:
+            dataset = source
 
-            for entry in tqdm(r):
-                self._total_unfiltered += 1
+        for entry in tqdm(dataset):
+            self._total_unfiltered += 1
 
-                if entry["relation"] not in rel_whitelist:
-                    continue
+            if isinstance(entry, Relation):
+                entry = entry._asdict()
+            elif isinstance(entry, (tuple, list)):
+                # Booo, lame
+                entry = Relation(*entry)._asdict()
 
-                resolved_rel: str = self._rel_mapping.get(entry["relation"], entry["relation"])
+            if self._rel_whitelist and entry["relation"] not in self._rel_whitelist:
+                continue
 
-                self._by_rel[resolved_rel].add((entry["word_left"], entry["word_right"]))
-                self._all_rels.add(
-                    Relation(word_left=entry["word_left"], word_right=entry["word_right"], relation=resolved_rel)
-                )
-                self._total += 1
+            resolved_rel: str = self._rel_mapping.get(entry["relation"], entry["relation"])
+
+            words = list(map(preprocess_lemma, [entry["word_left"], entry["word_right"]]))
+            if resolved_rel not in ASSYMETRIC_RELATIONS and sort_lemmas:
+                words = sorted(words)
+
+            self._by_rel[resolved_rel].add((words[0], words[1]))
+            self._all_rels.add(Relation(word_left=words[0], word_right=words[1], relation=resolved_rel))
+            self._total += 1
+
+        if isinstance(source, Path):
+            fp_in.close()
 
     def __str__(self) -> str:
         nl: str = "\n"
@@ -152,6 +242,51 @@ class RelationDictionary:
         Rel types:\t{len(self._by_rel)}
         Composition:\n{nl.join(f'{tab}{rel}: {len(lemmas)}' for rel, lemmas in self._by_rel.items() )}
         """
+
+    def to_csv(self, output_file: Union[Path, str]) -> None:
+        """
+        Saves the relationship dictionary into the csv file
+        """
+        with Path(output_file).open("w") as fp_out:
+            w = csv.DictWriter(fp_out, fieldnames=["relation", "word_left", "word_right"])
+            w.writeheader()
+
+            for rel_entry in self._all_rels:
+                w.writerow(rel_entry._asdict())
+
+    def remap(self, mapping: Dict[str, str]) -> "RelationDictionary":
+        """
+        Returns the copy of the existing dictionary with relations mapped through the mapping
+        Useful when you need to declare some relations as REL_RANDOM
+        """
+        return RelationDictionary(self._all_rels, rel_mapping=mapping)
+
+    def flip(self) -> "RelationDictionary":
+        """
+        Return the copy of the existing dictionary with lemmas swapped and relations remapped
+        (synonyms will remain synonyms, while assymetric relations will be replaced with their
+        inverses)
+        """
+
+        return RelationDictionary(
+            [(word_right, word_left, relation) for word_left, word_right, relation in self._all_rels],
+            rel_mapping=FLIPPED_MAPPING,
+        )
+
+    def filter(self, filter_func: Callable) -> "RelationDictionary":
+        """
+        Returns a filtered copy of the current dictionary
+        """
+
+        pairs_to_export: Set[Tuple[str, str, str]] = set()
+
+        for rel_type, rel_pairs in self._by_rel.items():
+            rel_pairs = filter_func(rel_pairs)
+
+            for rel_pair in rel_pairs:
+                pairs_to_export.add(rel_pair + (rel_type,))
+
+        return RelationDictionary(pairs_to_export)
 
 
 class RelationDataset:
@@ -175,24 +310,214 @@ class RelationDataset:
         self._rel_whitelist = rel_whitelist
         self.rel_dicts: Dict[str, RelationDictionary] = {}
 
-    def add_lemma_dict(self, dict_handle: str, csv_source: Path) -> None:
+    def add_lemma_dict(self, dict_handle: str, csv_source: Path) -> LemmaDictionary:
         self.lemma_dicts[dict_handle] = LemmaDictionary(csv_source, pos_whitelist=self._pos_whitelist)
 
-    def add_rel_dict(self, dict_handle: str, csv_source: Path) -> None:
-        self.rel_dicts[dict_handle] = RelationDictionary(csv_source, rel_whitelist=self._rel_whitelist)
+        return self.lemma_dicts[dict_handle]
+
+    def add_rel_dict(self, dict_handle: str, csv_source: Path) -> RelationDictionary:
+        self.rel_dicts[dict_handle] = RelationDictionary(source=csv_source, rel_whitelist=self._rel_whitelist)
+
+        return self.rel_dicts[dict_handle]
+
+    def iter_relation_sources(self) -> Generator[Tuple[str, set], None, None]:
+        for dict_handle, rel_dict in self.rel_dicts.items():
+            for rel_type, rel_pairs in rel_dict._by_rel.items():
+                yield f"{dict_handle}/{rel_type}", rel_pairs
+
+    def apply_filter(self, pairs: set, freq_dict_handle: str, min_freq: float = 0):
+        """
+        Helper function to drop the pairs from the dataset which doesn't appear in the given
+        lemma dict (or infrequent ones)
+        """
+        assert freq_dict_handle in self.lemma_dicts, "Invalid dict handle, exiting"
+
+        freqs = self.lemma_dicts[freq_dict_handle]._freqs
+
+        return set(
+            [
+                pair
+                for pair in pairs
+                if pair[0] in freqs and pair[1] in freqs and freqs[pair[0]] >= min_freq and freqs[pair[1]] >= min_freq
+            ]
+        )
+
+    def order_by_freq(self, pair: Tuple[str, str, str], freq_dict_handle: str):
+        """
+        Helper function to sort the relations dict by the popularity of the relation
+        (where popularity it the avg of freqs of both lemmas)
+        """
+        assert freq_dict_handle in self.lemma_dicts, "Invalid dict handle, exiting"
+
+        freqs = self.lemma_dicts[freq_dict_handle]._freqs
+
+        return (freqs.get(pair[0], 0) + freqs.get(pair[1], 0)) / 2  # Well, / 2 is not necessary here
+
+    def overlap_matrix(self, filter_func: Optional[Callable] = None) -> pd.DataFrame:
+        """
+        Calculates an overlap matrix over the different datasets and relations to examine
+        the number of wordpairs that overlap between dataset's relations
+        """
+        if filter_func is None:
+            all_rels: Dict[str, Set] = {handle: rels for handle, rels in self.iter_relation_sources()}
+        else:
+            all_rels = {handle: filter_func(rels) for handle, rels in self.iter_relation_sources()}
+
+        handles: list[str] = list(all_rels.keys())
+        rels: list[Set] = list(all_rels.values())
+
+        return pd.DataFrame(
+            [[len(rel1.intersection(rel2)) for rel2 in rels] for rel1 in rels], index=handles, columns=handles
+        )
+
+    def combine_relations(
+        self,
+        rel_dicts: List[Union[str, RelationDictionary]],
+        composition: Dict[str, int],
+        order_by: Optional[Callable] = None,
+    ) -> RelationDictionary:
+        """
+        Combines different relation dictionaries, dropping wordpairs that has more than one relation
+        (usually happens due to noisy datasets, when, for example black and white appears as synonyms
+        and antonyms in two different datasets).
+        Also function can apply optional sorting (for example by frequency) and maintain required
+        dataset composition
+
+        Caveat: sorting is not preserved during the export of the resulting dictionary. It only
+        helps to pick top-n pairs of each class
+        """
+        resolved_rel_dicts: List[RelationDictionary] = [
+            self.rel_dicts[rel_dict] if isinstance(rel_dict, str) else rel_dict for rel_dict in rel_dicts
+        ]
+        all_pairs: Set[Tuple[str, str, str]] = set()
+
+        # Keeping track how many different relations has a wordpair
+        occurences: defaultdict = defaultdict(set)
+        for rel_dict in resolved_rel_dicts:
+            for rel_type, rel_pairs in rel_dict._by_rel.items():
+                for rel_pair in rel_pairs:
+                    # Here we are sorting all the pairs despite the fact that
+                    # some relations are asymmetric
+                    occurences[tuple(sorted(rel_pair))].add(rel_type)
+                    all_pairs.add(rel_pair + (rel_type,))
+
+        # Optional sorting (by lemma popularity)
+        if order_by:
+            pairs_to_filter: List[Tuple[str, str, str]] = sorted(all_pairs, key=order_by, reverse=True)
+        else:
+            pairs_to_filter = list(all_pairs)
+
+        current_composition: defaultdict = defaultdict(int)
+        pairs_to_export: List[Tuple[str, str, str]] = []
+
+        for word_left, word_right, relation in pairs_to_filter:
+            if relation not in composition:
+                continue
+
+            # Set of relations where that word pair was used
+            used_in_rels: set[str] = occurences[tuple(sorted([word_left, word_right]))]
+
+            # If word pair was used more than in one relation (and those aren't inverse to each other)
+            # we drop that pair without doubt. E.g antonym/synonym is not ok,
+            # hypernym-hyponym/hyponym-hypernym is ok (TODO: still might be an issue)
+
+            if len(used_in_rels) > 1 and (used_in_rels not in INVERSE_RELATIONS):
+                continue
+
+            if current_composition[relation] < composition[relation]:
+                current_composition[relation] += 1
+                pairs_to_export.append((word_left, word_right, relation))
+
+        return RelationDictionary(pairs_to_export)
 
 
 if __name__ == "__main__":
+    # Below is the recepy to take 4 different rel datasets, filter them through
+    # the vesum lemma dict (to remove all non-lemmas, rare words or phrases)
+    # and then combine them into the balanced dataset of four classes where only N most
+    # popular word pairs are included (according to ubertext_freq lemma frequency dictionary)
+
+    # To speedup the computation and reduce the memory footprint a shorter version of the
+    # ubertext freq dictionary called ubertext_freq.lean.csv.xz might be used
+
     rd = RelationDataset()
-    # rd.add_lemma_dict("ubertext_freq", Path("dictionaries/lemmas/ubertext_freq.csv.xz"))
+    rd.add_lemma_dict("ubertext_freq", Path("dictionaries/lemmas/ubertext_freq.csv.xz"))
+
     rd.add_lemma_dict("vesum", Path("dictionaries/lemmas/vesum.csv.xz"))
-    print(rd.lemma_dicts["vesum"])
 
-    rd.add_lemma_dict("ulif", Path("dictionaries/lemmas/ulif.csv.xz"))
-    print(rd.lemma_dicts["ulif"])
+    ulif_synonyms = rd.add_rel_dict("ulif_synonyms", Path("dictionaries/relations/ulif_synonyms.csv.xz"))
+    web_synonyms = rd.add_rel_dict("web_synonyms", Path("dictionaries/relations/web_synonyms.csv.xz"))
+    web_antonyms = rd.add_rel_dict("web_antonyms", Path("dictionaries/relations/web_antonyms.csv.xz"))
+    wn_wikidata = rd.add_rel_dict("wn_wikidata", Path("dictionaries/relations/wn_wikidata.csv.xz"))
 
-    rd.add_rel_dict("ulif_synonyms", Path("dictionaries/relations/ulif_synonyms.csv.xz"))
-    print(rd.rel_dicts["ulif_synonyms"])
+    web_synonyms_filtered = web_synonyms.filter(
+        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
+    )
 
-    rd.add_rel_dict("wn_wikidata", Path("dictionaries/relations/wn_wikidata.csv.xz"))
-    print(rd.rel_dicts["wn_wikidata"])
+    web_antonyms_filtered = web_antonyms.filter(
+        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
+    )
+
+    ulif_synonyms_filtered = ulif_synonyms.filter(
+        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
+    )
+
+    wn_wikidata_filtered = wn_wikidata.filter(
+        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
+    )
+
+    # TODO: add also inverse relation
+    # TODO: allow for additional filtering of the synonyms, for example only use
+    # those where pairs that happens in two or more sources (that'll remove some noise)
+    combined_dataset = rd.combine_relations(
+        [web_synonyms_filtered, web_antonyms_filtered, ulif_synonyms_filtered, wn_wikidata_filtered],
+        {REL_ANTONYM: 3500, REL_SYNONYM: 3500, REL_CO_HYPONYMS: 3500, REL_HYPERNYM_HYPONYM: 3500},
+        order_by=lambda x: rd.order_by_freq(x, freq_dict_handle="ubertext_freq"),
+    )
+
+    # TODO: recepy for the one-vs-all dataset preparation through .map
+
+    # TODO: move recepies into the README.md
+    print(combined_dataset)
+    combined_dataset.to_csv("/tmp/4cls.3500cap_alter.csv")
+
+    # The recepy below allows to build a confusion matrix between different datasets using different
+    # filtering strategies. That can show how many different word pairs has more than one relation
+    # in different dataset (i.e considered as a synonym AND antonym by different sources)
+
+    # with pd.ExcelWriter("/tmp/overlap_matrix.xlsx") as pd_writer:
+    #     overlap_df = rd.overlap_matrix()
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="unfiltered rels")
+
+    #     overlap_df = rd.overlap_matrix(filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ulif"))
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (ulif)")
+
+    #     overlap_df = rd.overlap_matrix(filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"))
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (vesum)")
+
+    #     overlap_df = rd.overlap_matrix(
+    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=1e-6)
+    #     )
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 1e-6)")
+
+    #     overlap_df = rd.overlap_matrix(
+    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=5e-6)
+    #     )
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 5e-6)")
+
+    #     overlap_df = rd.overlap_matrix(
+    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=5e-7)
+    #     )
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 5e-7)")
+
+    #     overlap_df = rd.overlap_matrix(
+    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=1e-7)
+    #     )
+    #     print(overlap_df)
+    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 1e-7)")
