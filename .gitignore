@@ -130,3 +130,6 @@ dmypy.json
 .idea/
 .DS_Store
 *.bz2
+
+data
+trees_path/trees
