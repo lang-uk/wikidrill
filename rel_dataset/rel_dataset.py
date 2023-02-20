@@ -48,6 +48,7 @@ def deaccent(text: str) -> str:
 
 
 def normalize_apostrophes(s: str) -> str:
+    # Kudos to Andriy Rysin for the regex
     s = re.sub(
         r"(?iu)([бвгґдзкмнпрстфхш])[\"\u201D\u201F\u0022\u2018\u2032\u0313\u0384\u0092´`?*]([єїюя])", r"\1'\2", s
     )
@@ -164,7 +165,7 @@ class RelationDictionary:
     """
     Most of the methods of this class are chainable so you can easily combine them
     like this:
-        .filter(my_func1).filter(my_func2).swap().remap({REL_ANTONYM: REL_UNKNOWN})
+        .filter(my_func1).filter(my_func2).flip().remap({REL_ANTONYM: REL_UNKNOWN})
 
     mind the memory usage tho
     """
@@ -248,7 +249,7 @@ class RelationDictionary:
         Saves the relationship dictionary into the csv file
         """
         with Path(output_file).open("w") as fp_out:
-            w = csv.DictWriter(fp_out, fieldnames=["relation", "word_left", "word_right"])
+            w = csv.DictWriter(fp_out, fieldnames=["word_left", "word_right", "relation"])
             w.writeheader()
 
             for rel_entry in self._all_rels:
@@ -259,7 +260,7 @@ class RelationDictionary:
         Returns the copy of the existing dictionary with relations mapped through the mapping
         Useful when you need to declare some relations as REL_RANDOM
         """
-        return RelationDictionary(self._all_rels, rel_mapping=mapping)
+        return RelationDictionary(self._all_rels, rel_mapping=mapping, sort_lemmas=False)
 
     def flip(self) -> "RelationDictionary":
         """
@@ -271,9 +272,16 @@ class RelationDictionary:
         return RelationDictionary(
             [(word_right, word_left, relation) for word_left, word_right, relation in self._all_rels],
             rel_mapping=FLIPPED_MAPPING,
+            sort_lemmas=False,
         )
 
-    def filter(self, filter_func: Callable) -> "RelationDictionary":
+    def add_flipped(self) -> "RelationDictionary":
+        """
+        Return the union of existing dictionary and a flipped one
+        """
+        return self.union(self.flip(), sort_lemmas=False)
+
+    def filter(self, filter_func: Callable, sort_lemmas: bool) -> "RelationDictionary":
         """
         Returns a filtered copy of the current dictionary
         """
@@ -286,7 +294,53 @@ class RelationDictionary:
             for rel_pair in rel_pairs:
                 pairs_to_export.add(rel_pair + (rel_type,))
 
-        return RelationDictionary(pairs_to_export)
+        return RelationDictionary(pairs_to_export, sort_lemmas=sort_lemmas)
+
+    def intersect(self, other_dict: "RelationDictionary", sort_lemmas: bool) -> "RelationDictionary":
+        """
+        Returns an intersection of two dictionaries
+        """
+
+        return RelationDictionary(self._all_rels.intersection(other_dict._all_rels), sort_lemmas=sort_lemmas)
+
+    def union(self, other_dict: "RelationDictionary", sort_lemmas: bool) -> "RelationDictionary":
+        """
+        Returns a union of two dictionaries
+        """
+
+        return RelationDictionary(self._all_rels.union(other_dict._all_rels), sort_lemmas=sort_lemmas)
+
+    def compose(
+        self,
+        composition: Dict[str, int],
+        order_by: Optional[Callable] = None,
+    ) -> "RelationDictionary":
+        """
+        Also function can apply optional sorting (for example by frequency) and maintain required
+        dataset composition (e.g composition={REL_ANTONYM: 3500, REL_SYNONYM: 3500} will export up
+        to 3500 antonyms and synonyms). You might use -1 to export all relations we got
+
+        Caveat: sorting is not preserved during the export of the resulting dictionary. It only
+        helps to pick top-n pairs of each class"""
+
+        # Optional sorting (by lemma popularity)
+        if order_by:
+            pairs_to_filter: List[Tuple[str, str, str]] = sorted(self._all_rels, key=order_by, reverse=True)
+        else:
+            pairs_to_filter = list(self._all_rels)
+
+        current_composition: defaultdict = defaultdict(int)
+        pairs_to_export: List[Tuple[str, str, str]] = []
+
+        for word_left, word_right, relation in pairs_to_filter:
+            if relation not in composition:
+                continue
+
+            if current_composition[relation] < composition[relation] or composition[relation] == -1:
+                current_composition[relation] += 1
+                pairs_to_export.append((word_left, word_right, relation))
+
+        return RelationDictionary(pairs_to_export, sort_lemmas=False)
 
 
 class RelationDataset:
@@ -373,18 +427,11 @@ class RelationDataset:
     def combine_relations(
         self,
         rel_dicts: List[Union[str, RelationDictionary]],
-        composition: Dict[str, int],
-        order_by: Optional[Callable] = None,
     ) -> RelationDictionary:
         """
         Combines different relation dictionaries, dropping wordpairs that has more than one relation
         (usually happens due to noisy datasets, when, for example black and white appears as synonyms
         and antonyms in two different datasets).
-        Also function can apply optional sorting (for example by frequency) and maintain required
-        dataset composition
-
-        Caveat: sorting is not preserved during the export of the resulting dictionary. It only
-        helps to pick top-n pairs of each class
         """
         resolved_rel_dicts: List[RelationDictionary] = [
             self.rel_dicts[rel_dict] if isinstance(rel_dict, str) else rel_dict for rel_dict in rel_dicts
@@ -401,19 +448,8 @@ class RelationDataset:
                     occurences[tuple(sorted(rel_pair))].add(rel_type)
                     all_pairs.add(rel_pair + (rel_type,))
 
-        # Optional sorting (by lemma popularity)
-        if order_by:
-            pairs_to_filter: List[Tuple[str, str, str]] = sorted(all_pairs, key=order_by, reverse=True)
-        else:
-            pairs_to_filter = list(all_pairs)
-
-        current_composition: defaultdict = defaultdict(int)
         pairs_to_export: List[Tuple[str, str, str]] = []
-
-        for word_left, word_right, relation in pairs_to_filter:
-            if relation not in composition:
-                continue
-
+        for word_left, word_right, relation in all_pairs:
             # Set of relations where that word pair was used
             used_in_rels: set[str] = occurences[tuple(sorted([word_left, word_right]))]
 
@@ -424,11 +460,9 @@ class RelationDataset:
             if len(used_in_rels) > 1 and (used_in_rels not in INVERSE_RELATIONS):
                 continue
 
-            if current_composition[relation] < composition[relation]:
-                current_composition[relation] += 1
-                pairs_to_export.append((word_left, word_right, relation))
+            pairs_to_export.append((word_left, word_right, relation))
 
-        return RelationDictionary(pairs_to_export)
+        return RelationDictionary(pairs_to_export, sort_lemmas=False)
 
 
 if __name__ == "__main__":
@@ -447,77 +481,44 @@ if __name__ == "__main__":
 
     ulif_synonyms = rd.add_rel_dict("ulif_synonyms", Path("dictionaries/relations/ulif_synonyms.csv.xz"))
     web_synonyms = rd.add_rel_dict("web_synonyms", Path("dictionaries/relations/web_synonyms.csv.xz"))
-    web_antonyms = rd.add_rel_dict("web_antonyms", Path("dictionaries/relations/web_antonyms.csv.xz"))
-    wn_wikidata = rd.add_rel_dict("wn_wikidata", Path("dictionaries/relations/wn_wikidata.csv.xz"))
 
-    web_synonyms_filtered = web_synonyms.filter(
-        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
-    )
+    # Here we are only taking synonym pairs that can be found in both web and ulif
+    top_synonyms = ulif_synonyms.intersect(web_synonyms, sort_lemmas=True).add_flipped()
 
-    web_antonyms_filtered = web_antonyms.filter(
-        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
-    )
+    web_antonyms = rd.add_rel_dict("web_antonyms", Path("dictionaries/relations/web_antonyms.csv.xz")).add_flipped()
+    wn_wikidata = rd.add_rel_dict("wn_wikidata", Path("dictionaries/relations/wn_wikidata.csv.xz")).add_flipped()
 
-    ulif_synonyms_filtered = ulif_synonyms.filter(
-        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
-    )
-
-    wn_wikidata_filtered = wn_wikidata.filter(
-        filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"),
-    )
-
-    # TODO: add also inverse relation
-    # TODO: allow for additional filtering of the synonyms, for example only use
-    # those where pairs that happens in two or more sources (that'll remove some noise)
     combined_dataset = rd.combine_relations(
-        [web_synonyms_filtered, web_antonyms_filtered, ulif_synonyms_filtered, wn_wikidata_filtered],
-        {REL_ANTONYM: 3500, REL_SYNONYM: 3500, REL_CO_HYPONYMS: 3500, REL_HYPERNYM_HYPONYM: 3500},
+        [top_synonyms, web_antonyms, wn_wikidata],
+    ).filter(filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"), sort_lemmas=False)
+
+    print(combined_dataset)
+
+    one_vs_one_dataset = combined_dataset.compose(
+        {
+            REL_ANTONYM: 10000,
+            REL_SYNONYM: 10000,
+            REL_CO_HYPONYMS: 10000,
+            REL_HYPERNYM_HYPONYM: 10000,
+            REL_HYPONYM_HYPERNYM: 10000,
+        },
         order_by=lambda x: rd.order_by_freq(x, freq_dict_handle="ubertext_freq"),
     )
 
-    # TODO: recepy for the one-vs-all dataset preparation through .map
+    print(one_vs_one_dataset)
+    one_vs_one_dataset.to_csv("/tmp/5cls.10000cap.csv")
 
-    # TODO: move recepies into the README.md
-    print(combined_dataset)
-    combined_dataset.to_csv("/tmp/4cls.3500cap_alter.csv")
+    one_vs_all_dataset = combined_dataset.remap(
+        {
+            REL_ANTONYM: REL_RANDOM,
+            REL_CO_HYPONYMS: REL_RANDOM,
+            REL_HYPERNYM_HYPONYM: REL_RANDOM,
+            REL_HYPONYM_HYPERNYM: REL_RANDOM,
+        }
+    ).compose(
+        {REL_SYNONYM: 75000, REL_RANDOM: 75000},
+        order_by=lambda x: rd.order_by_freq(x, freq_dict_handle="ubertext_freq"),
+    )
 
-    # The recepy below allows to build a confusion matrix between different datasets using different
-    # filtering strategies. That can show how many different word pairs has more than one relation
-    # in different dataset (i.e considered as a synonym AND antonym by different sources)
-
-    # with pd.ExcelWriter("/tmp/overlap_matrix.xlsx") as pd_writer:
-    #     overlap_df = rd.overlap_matrix()
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="unfiltered rels")
-
-    #     overlap_df = rd.overlap_matrix(filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ulif"))
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (ulif)")
-
-    #     overlap_df = rd.overlap_matrix(filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="vesum"))
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (vesum)")
-
-    #     overlap_df = rd.overlap_matrix(
-    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=1e-6)
-    #     )
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 1e-6)")
-
-    #     overlap_df = rd.overlap_matrix(
-    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=5e-6)
-    #     )
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 5e-6)")
-
-    #     overlap_df = rd.overlap_matrix(
-    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=5e-7)
-    #     )
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 5e-7)")
-
-    #     overlap_df = rd.overlap_matrix(
-    #         filter_func=lambda x: rd.apply_filter(x, freq_dict_handle="ubertext_freq", min_freq=1e-7)
-    #     )
-    #     print(overlap_df)
-    #     overlap_df.to_excel(pd_writer, sheet_name="filtered rels (freqs, 1e-7)")
+    print(one_vs_all_dataset)
+    one_vs_all_dataset.to_csv("/tmp/synonym-vs-random.75000cap.csv")
