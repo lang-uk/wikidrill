@@ -60,3 +60,16 @@ def get_instance_hyponyms(synset_id):
     if "instance_hyponym" not in wn.synset(synset_id).relations():
         return []
     return [el.id for el in wn.synset(synset_id).relations()["instance_hyponym"]]
+
+
+def get_hypernyms(synset_id):
+    """
+    Returns hypernyms for given synset id.
+    :param synset_id: string
+    :return: list
+    """
+    if "hypernym" in wn.synset(synset_id).relations():
+        return [el.id for el in wn.synset(synset_id).relations()["hypernym"]], "Concept"
+    if "instance_hypernym" in wn.synset(synset_id).relations():
+        return [el.id for el in wn.synset(synset_id).relations()["instance_hypernym"]], "Entity"
+    return [], None
