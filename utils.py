@@ -1,7 +1,9 @@
 import glob
 import csv
-from tqdm import tqdm
 import os
+from typing import List, Optional, Tuple, Set
+
+from tqdm import tqdm
 from extractor import extract_from_page
 import wn
 
@@ -40,36 +42,70 @@ def merge_csv(folder_name, out_file, header_list, delimiter):
                 writer.writerows(line)
 
 
-def get_hyponyms(synset_id):
+def get_hyponyms(synset_id: str) -> List[str]:
     """
     Returns hyponyms for given synset id.
     :param synset_id: string
     :return: list
     """
-    if "hyponym" not in wn.synset(synset_id).relations():
+
+    try:
+        rels = wn.synset(synset_id).relations()
+    except wn.Error as e:
+        print(f"{synset_id} gave us some troubles: {e}")
         return []
-    return [el.id for el in wn.synset(synset_id).relations()["hyponym"]]
+
+    if "hyponym" not in rels:
+        return []
+    return [el.id for el in rels["hyponym"]]
 
 
-def get_instance_hyponyms(synset_id):
+def get_instance_hyponyms(synset_id: str) -> List[str]:
     """
     Returns instance hyponyms for given synset id.
     :param synset_id: string
     :return: list
     """
-    if "instance_hyponym" not in wn.synset(synset_id).relations():
+    try:
+        rels = wn.synset(synset_id).relations()
+    except wn.Error as e:
+        print(f"{synset_id} gave us some troubles: {e}")
         return []
+
+    if "instance_hyponym" not in rels:
+        return []
+
     return [el.id for el in wn.synset(synset_id).relations()["instance_hyponym"]]
 
 
-def get_hypernyms(synset_id):
+def get_hypernyms(synset_id: str) -> Tuple[List[str], Optional[str]]:
     """
     Returns hypernyms for given synset id.
     :param synset_id: string
     :return: list
     """
-    if "hypernym" in wn.synset(synset_id).relations():
-        return [el.id for el in wn.synset(synset_id).relations()["hypernym"]], "Concept"
-    if "instance_hypernym" in wn.synset(synset_id).relations():
-        return [el.id for el in wn.synset(synset_id).relations()["instance_hypernym"]], "Entity"
+    try:
+        rels = wn.synset(synset_id).relations()
+    except wn.Error as e:
+        print(f"{synset_id} gave us some troubles: {e}")
+
+        return [], None
+
+    if "hypernym" in rels:
+        return [el.id for el in rels["hypernym"]], "Concept"
+    if "instance_hypernym" in rels:
+        return [el.id for el in rels["instance_hypernym"]], "Entity"
     return [], None
+
+
+def get_cohyponyms(synset_id: str) -> List[str]:
+    rels = wn.synset(synset_id).relations()
+
+    hypernyms = [el.id for el in rels.get("hypernym", [])] + [el.id for el in rels.get("instance_hypernym", [])]
+
+    res: Set[str] = set()
+    for hypernym in hypernyms:
+        res.update(get_hyponyms(hypernym))
+        res.update(get_instance_hyponyms(hypernym))
+
+    return list(res - set([synset_id]))
