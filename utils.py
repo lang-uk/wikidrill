@@ -2,6 +2,7 @@ import glob
 import csv
 import os
 from typing import List, Optional, Tuple, Set
+from functools import cache
 
 from tqdm import tqdm
 from extractor import extract_from_page
@@ -41,12 +42,12 @@ def merge_csv(folder_name, out_file, header_list, delimiter):
                 line = [list(elem.strip().split(";")) for elem in f_out]
                 writer.writerows(line)
 
-
+@cache
 def get_hyponyms(synset_id: str) -> List[str]:
     """
     Returns hyponyms for given synset id.
     :param synset_id: string
-    :return: list
+    :return: list of synset ids
     """
 
     try:
@@ -59,12 +60,12 @@ def get_hyponyms(synset_id: str) -> List[str]:
         return []
     return [el.id for el in rels["hyponym"]]
 
-
+@cache
 def get_instance_hyponyms(synset_id: str) -> List[str]:
     """
     Returns instance hyponyms for given synset id.
     :param synset_id: string
-    :return: list
+    :return: list of synset ids
     """
     try:
         rels = wn.synset(synset_id).relations()
@@ -77,7 +78,7 @@ def get_instance_hyponyms(synset_id: str) -> List[str]:
 
     return [el.id for el in wn.synset(synset_id).relations()["instance_hyponym"]]
 
-
+@cache
 def get_hypernyms(synset_id: str) -> Tuple[List[str], Optional[str]]:
     """
     Returns hypernyms for given synset id.
@@ -97,8 +98,13 @@ def get_hypernyms(synset_id: str) -> Tuple[List[str], Optional[str]]:
         return [el.id for el in rels["instance_hypernym"]], "Entity"
     return [], None
 
-
+@cache
 def get_cohyponyms(synset_id: str) -> List[str]:
+    """
+    Returns cohyponyms for given synset id.
+    :param synset_id: string
+    :return: list of synset ids
+    """
     rels = wn.synset(synset_id).relations()
 
     hypernyms = [el.id for el in rels.get("hypernym", [])] + [el.id for el in rels.get("instance_hypernym", [])]

@@ -1,15 +1,14 @@
 import re
 import json
 import argparse
-from random import seed, shuffle
+from random import seed, shuffle, choice
 from itertools import chain
-from typing import List, Tuple, Dict, Set, Union, Optional
+from typing import List, Dict, Union, Literal, Optional
 import pathlib
 
 from tqdm import tqdm
 import jinja2
 import pandas as pd
-from typing import List, Tuple, Dict, Set, Union, Optional
 from more_itertools import unique_everseen
 from utils import get_hypernyms, get_hyponyms, get_cohyponyms, get_instance_hyponyms
 
@@ -20,6 +19,9 @@ seed(42)
 
 
 def num_to_str_jinja_filter(input: int) -> str:
+    """
+    Convert number to string in ukrainian (only for 1-9)
+    """
     return {
         1: "один",
         2: "два",
@@ -33,10 +35,35 @@ def num_to_str_jinja_filter(input: int) -> str:
     }.get(input, "багато")
 
 
+def ukr_plural(value: Union[str, int, float], *args) -> str:
+    """
+    Pluralize ukrainian words according to the numerical
+    """
+
+    value = int(value) % 100
+    rem = value % 10
+    if value > 4 and value < 20:
+        return args[2]
+    elif rem == 1:
+        return args[0]
+    elif rem > 1 and rem < 5:
+        return args[1]
+    else:
+        return args[2]
+
+
+def ukr_plural_jinja_filter(value: Union[str, int, float], args: str) -> str:
+    """
+    Pluralize ukrainian words according to the numerical
+    """
+    return ukr_plural(value, *args.split(","))
+
+
 env.filters["num_to_str"] = num_to_str_jinja_filter
+env.filters["ukr_plural"] = ukr_plural_jinja_filter
 
 
-def render_template(anchor_word: str, related_words: List[str], template: str) -> str:
+def render_template(anchor_word: str, related_words: List[str], template: str, rel_meta: Dict) -> str:
     """
     Render template with jinja2
     :param anchor_word: string
@@ -46,16 +73,23 @@ def render_template(anchor_word: str, related_words: List[str], template: str) -
     """
 
     return env.from_string(template).render(
-        anchor_word=anchor_word, related_words=related_words, related_words_len=len(related_words)
+        anchor_word=anchor_word,
+        related_words=related_words,
+        related_words_len=len(related_words),
+        rel_meta=rel_meta,
     )
 
 
 TEMPLATES: Dict[str, List[str]] = {
     "hypernyms": [
+        "Згенеруй мені {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("гіперонім,гіпероніма,гіперонімів") }} до слова "{{ anchor_word }}".',
+        "Запропонуй мені {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("гіперонім,гіпероніма,гіперонімів") }} до поняття "{{ anchor_word }}".',
         'Надай мені декілька гіперонімів до слова "{{ anchor_word }}".',
-        'Надай мені {{ related_words_len }} гіперонімів до слова "{{ anchor_word }}".',
+        'Надай мені {{ related_words_len }} {{ related_words_len|ukr_plural("гіперонім,гіпероніма,гіперонімів") }} до слова "{{ anchor_word }}".',
         'Які слова є гіперонімами "{{ anchor_word }}"?',
-        'Які слова є гіперонімами слова "{{ anchor_word }}"?',
+        'Які слова є гіперонімами поняття "{{ anchor_word }}"?',
         'Які загальні поняття описують слово "{{ anchor_word }}"?',
         'Які ще слова належать до більш загального поняття, ніж "{{ anchor_word }}"?',
         'Які слова описують більш загальне поняття, ніж "{{ anchor_word }}"?',
@@ -86,8 +120,6 @@ TEMPLATES: Dict[str, List[str]] = {
     "hyponyms": [
         'Запропонуй гіпоніми до слова-гіпероніма "{{ anchor_word }}',
         'Які слова належать до гіпонімів "{{ anchor_word }}?',
-        # 'Які терміни входять до групи "{{ anchor_word }}?',
-        # 'Які терміни належать до групи "{{ anchor_word }}?',
         'Які поняття є більш конкретними, ніж "{{ anchor_word }}?',
         'Які інші терміни можуть бути використані, щоб позначити деталізацію поняття "{{ anchor_word }}?',
         'Які ще слова можна використовувати, щоб позначити менші елементи в рамках поняття "{{ anchor_word }}?',
@@ -103,28 +135,48 @@ TEMPLATES: Dict[str, List[str]] = {
 
 
 def load_titles(fname: pathlib.Path) -> pd.DataFrame:
-    filtered_uk: pd.DataFrame = pd.read_csv(fname, sep=";").loc[lambda x: x["rel"] == "pwn31_to_uk_wiki"]
+    """
+    Load titles from csv file and filter them.
+    """
+    filtered_uk: pd.DataFrame = pd.read_csv(fname, sep=";").loc[
+        lambda x: x["rel"] == "pwn31_to_uk_wiki"
+    ]
     filtered_uk = filtered_uk.loc[
-        ~filtered_uk["title"].isin(["Фізичне тіло", "Тверде тіло", "Матерія (фізика)", "Суще"])
+        ~filtered_uk["title"].isin(
+            ["Фізичне тіло", "Тверде тіло", "Матерія (фізика)", "Суще"]
+        )
     ]
 
     filtered_uk = filtered_uk.dropna().reset_index(drop=True)
 
     pattern = r"\([^)]*\)"
 
-    filtered_uk["title"] = filtered_uk["title"].apply(lambda x: re.sub(pattern, "", x).strip())
+    filtered_uk["title"] = filtered_uk["title"].apply(
+        lambda x: re.sub(pattern, "", x).strip()
+    )
 
     # Temporary filter bigrams and trigrams
     filtered_uk = filtered_uk[filtered_uk["title"].apply(lambda x: len(x.split())) < 2]
 
-    filtered_uk = filtered_uk[filtered_uk["title"].str.match(r".*[^\x00-\xFF]")].reset_index(drop=True)
+    filtered_uk = filtered_uk[
+        filtered_uk["title"].str.match(r".*[^\x00-\xFF]")
+    ].reset_index(drop=True)
     filtered_uk["title"] = filtered_uk["title"].str.lower()
 
     return filtered_uk
 
 
 def get_titles(wn_dict: pd.DataFrame, titles: List[str]) -> pd.DataFrame:
-    return wn_dict.set_index("id_from").reindex(titles)["title"].dropna().drop_duplicates().tolist()
+    """
+    Get translated titles from the dictionary.
+    """
+    return (
+        wn_dict.set_index("id_from")
+        .reindex(titles)["title"]
+        .dropna()
+        .drop_duplicates()
+        .tolist()
+    )
 
 
 def generate_hypernyms(wn_dict: pd.DataFrame, levels: int = 5) -> List[Dict]:
@@ -134,7 +186,7 @@ def generate_hypernyms(wn_dict: pd.DataFrame, levels: int = 5) -> List[Dict]:
 
     data = []
 
-    for idx, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
+    for _, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
         res = {}
         hypernyms, query_type = get_hypernyms(row["id_from"])
 
@@ -160,9 +212,6 @@ def generate_hypernyms(wn_dict: pd.DataFrame, levels: int = 5) -> List[Dict]:
                 res["related_words"] = hypernym_titles
                 data.append(res)
 
-        # if len(data) > 5:
-        #     break
-
     return data
 
 
@@ -173,9 +222,12 @@ def generate_hyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
 
     data = []
 
-    for idx, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
+    for _, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
         res = {}
-        hyponyms = list(set(get_hyponyms(row["id_from"])) | set(get_instance_hyponyms(row["id_from"])))
+        hyponyms = list(
+            set(get_hyponyms(row["id_from"]))
+            | set(get_instance_hyponyms(row["id_from"]))
+        )
 
         if hyponyms:
             hyponym_titles = get_titles(wn_dict, hyponyms)
@@ -189,9 +241,6 @@ def generate_hyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
                 res["related_words"] = hyponym_titles
                 data.append(res)
 
-        # if len(data) > 5:
-        #     break
-
     return data
 
 
@@ -202,7 +251,7 @@ def generate_cohyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
 
     data = []
 
-    for idx, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
+    for _, row in tqdm(wn_dict.iterrows(), total=len(wn_dict)):
         res = {}
         hyponyms = get_cohyponyms(row["id_from"])
 
@@ -218,21 +267,46 @@ def generate_cohyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
                 res["related_words"] = cohyponym_titles
                 data.append(res)
 
-        # if len(data) > 5:
-        #     break
-
     return data
 
 
-def turn_into_instructions(relations: List[Dict], rel_type: str) -> List[Dict]:
+def turn_into_instructions(
+    relations: List[Dict],
+    rel_type: str,
+    strategy: Literal["all", "random", "first"] = "all",
+    meta: Optional[Dict] = None,
+) -> List[Dict]:
+    """
+    Turn relations into instructions.
+    relations: List[Dict] - list of relations (anchor word, related words, relation type)
+    rel_type: str - type of the relation (hypernym, hyponym, co-hyponym)
+    strategy: str - strategy for choosing the template (all, random, first)
+    meta: Dict - dictionary of meta information for the anchor words in the task, used for the enrichment
+    """
     instructions: List[Dict] = []
+    if meta is None:
+        meta = {}
 
     for rel in relations:
-        for rel_template in TEMPLATES[rel_type]:
+        if strategy == "first":
+            rel_templates = [TEMPLATES[rel_type][0]]
+        elif strategy == "random":
+            rel_templates = [choice(TEMPLATES[rel_type])]
+        else:
+            rel_templates = TEMPLATES[rel_type]
+
+        for rel_template in rel_templates:
             res: Dict = {}
-            # def render_template(anchor_word: str, related_words: List[str], template: str) -> str:
+            rel_meta: Dict = {}
+
+            if rel["query"].lower() in meta:
+                rel_meta = res["meta"] = meta[rel["query"].lower()]
+
             res["instruction"] = render_template(
-                anchor_word=rel["query"], related_words=rel["related_words"], template=rel_template
+                anchor_word=rel["query"],
+                related_words=rel["related_words"],
+                template=rel_template,
+                rel_meta=rel_meta,
             )
             res["input"] = ""
             shuffle(rel["related_words"])
@@ -245,16 +319,38 @@ def turn_into_instructions(relations: List[Dict], rel_type: str) -> List[Dict]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_path", type=pathlib.Path, help="Path to the file with the dictionary")
-    parser.add_argument("output_path", type=pathlib.Path, help="Path to the file with generated instructions")
-    args = parser.parse_args()
+    parser.add_argument(
+        "input_path", type=pathlib.Path, help="Path to the file with the dictionary"
+    )
+    parser.add_argument(
+        "output_path",
+        type=pathlib.Path,
+        help="Path to the file with generated instructions",
+    )
+    parser.add_argument(
+        "--meta-path",
+        type=pathlib.Path,
+        help="Path to the file with meta information for the anchor words",
+    )
+    cli_args = parser.parse_args()
+    meta_dict: Optional[Dict] = {}
 
-    wn_dict: pd.DataFrame = load_titles(pathlib.Path(args.input_path))
+    wn_titles_dict: pd.DataFrame = load_titles(pathlib.Path(cli_args.input_path))
+    if cli_args.meta_path:
+        with open(cli_args.meta_path) as fp_in:
+            meta_dict = json.load(fp_in)
+    else:
+        meta_dict = None
 
-    with args.output_path.open("w") as fp_out:
+    with cli_args.output_path.open("w") as fp_out:
         for instruction in chain(
-            turn_into_instructions(generate_hypernyms(wn_dict), "hypernyms"),
-            turn_into_instructions(generate_hyponyms(wn_dict), "hyponyms"),
-            turn_into_instructions(generate_cohyponyms(wn_dict), "co-hyponyms"),
+            turn_into_instructions(
+                generate_hypernyms(wn_titles_dict),
+                "hypernyms",
+                strategy="first",
+                meta=meta_dict,
+            ),
+            # turn_into_instructions(generate_hyponyms(wn_titles_dict), "hyponyms"),
+            # turn_into_instructions(generate_cohyponyms(wn_titles_dict), "co-hyponyms"),
         ):
             fp_out.write(json.dumps(instruction, ensure_ascii=False) + "\n")
