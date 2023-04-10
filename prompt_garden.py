@@ -106,6 +106,10 @@ TEMPLATES: Dict[str, List[str]] = {
         'Чи є ще слова, що належать до більш широкої категорії, ніж "{{ anchor_word }}"?',
     ],
     "co-hyponyms": [
+        "Згенеруй мені {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("когіпонім,когіпоніма,когіпонімів") }} до слова "{{ anchor_word }}".',
+        "Запропонуй мені {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("когіпонім,когіпоніма,когіпонімів") }} до поняття "{{ anchor_word }}".',
         'Згенеруй мені когіпоніми до слова "{{ anchor_word }}"',
         'Запропонуй мені когіпоніми до слова "{{ anchor_word }}"',
         'Які інші слова належать до когіпонімів "{{ anchor_word }}"?',
@@ -119,6 +123,10 @@ TEMPLATES: Dict[str, List[str]] = {
         'Які ще слова є частиною загального поняття, до якого належить "{{ anchor_word }}"?',
     ],
     "hyponyms": [
+        "Згенеруй {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("гіпонім,гіпоніма,гіпонімів") }} до слова "{{ anchor_word }}".',
+        "Запропонуй мені {{ related_words_len|num_to_str }} "
+        '{{ related_words_len|ukr_plural("гіпонім,гіпоніма,гіпонімів") }} до поняття "{{ anchor_word }}".',
         'Запропонуй гіпоніми до слова-гіпероніма "{{ anchor_word }}',
         'Які слова належать до гіпонімів "{{ anchor_word }}?',
         'Які поняття є більш конкретними, ніж "{{ anchor_word }}?',
