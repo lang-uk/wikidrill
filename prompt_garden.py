@@ -1,9 +1,8 @@
+from typing import List, Dict, Union, Literal, Optional, Callable
 import re
 import json
 import argparse
 from random import seed, shuffle, choice
-from itertools import chain
-from typing import List, Dict, Union, Literal, Optional
 import pathlib
 
 from tqdm import tqdm
@@ -63,7 +62,9 @@ env.filters["num_to_str"] = num_to_str_jinja_filter
 env.filters["ukr_plural"] = ukr_plural_jinja_filter
 
 
-def render_template(anchor_word: str, related_words: List[str], template: str, rel_meta: Dict) -> str:
+def render_template(
+    anchor_word: str, related_words: List[str], template: str, rel_meta: Dict
+) -> str:
     """
     Render template with jinja2
     :param anchor_word: string
@@ -328,11 +329,35 @@ if __name__ == "__main__":
         help="Path to the file with generated instructions",
     )
     parser.add_argument(
+        "--strategy",
+        type=str,
+        help="Strategy for choosing the template",
+        choices=["all", "random", "first"],
+        default="first",
+    )
+    parser.add_argument(
+        "--rel-type",
+        type=str,
+        help="Type of the relation",
+        nargs="+",
+        choices=["hypernyms", "hyponyms", "co-hyponyms"],
+        default=[
+            "hypernyms",
+        ],
+    )
+    parser.add_argument(
         "--meta-path",
         type=pathlib.Path,
         help="Path to the file with meta information for the anchor words",
     )
     cli_args = parser.parse_args()
+
+    rel_type_task: Dict[str, Callable] = {
+        "hypernyms": generate_hypernyms,
+        "hyponyms": generate_hyponyms,
+        "co-hyponyms": generate_cohyponyms,
+    }
+
     meta_dict: Optional[Dict] = {}
 
     wn_titles_dict: pd.DataFrame = load_titles(pathlib.Path(cli_args.input_path))
@@ -343,14 +368,11 @@ if __name__ == "__main__":
         meta_dict = None
 
     with cli_args.output_path.open("w") as fp_out:
-        for instruction in chain(
-            turn_into_instructions(
-                generate_hypernyms(wn_titles_dict),
-                "hypernyms",
-                strategy="first",
+        for rel_type in cli_args.rel_type:
+            for instruction in turn_into_instructions(
+                rel_type_task[rel_type](wn_titles_dict),
+                rel_type,
+                strategy=cli_args.strategy,
                 meta=meta_dict,
-            ),
-            # turn_into_instructions(generate_hyponyms(wn_titles_dict), "hyponyms"),
-            # turn_into_instructions(generate_cohyponyms(wn_titles_dict), "co-hyponyms"),
-        ):
-            fp_out.write(json.dumps(instruction, ensure_ascii=False) + "\n")
+            ):
+                fp_out.write(json.dumps(instruction, ensure_ascii=False) + "\n")
