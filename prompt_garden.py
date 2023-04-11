@@ -216,6 +216,7 @@ def generate_hypernyms(wn_dict: pd.DataFrame, levels: int = 5) -> List[Dict]:
             hypernym_titles = get_titles(wn_dict, all_hypernyms)
             if hypernym_titles and (row["title"] not in hypernym_titles):
                 res["query"] = row["title"]
+                res["id"] = row["id_from"]
                 res["query_type"] = query_type
                 res["relation"] = "hypernym"
                 res["related_words"] = hypernym_titles
@@ -245,6 +246,7 @@ def generate_hyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
 
             if hyponym_titles and (row["title"] not in hyponym_titles):
                 res["query"] = row["title"]
+                res["id"] = row["id_from"]
                 res["query_type"] = "Concept"
                 res["relation"] = "hyponym"
                 res["related_words"] = hyponym_titles
@@ -271,6 +273,7 @@ def generate_cohyponyms(wn_dict: pd.DataFrame) -> List[Dict]:
 
             if cohyponym_titles and (row["title"] not in cohyponym_titles):
                 res["query"] = row["title"]
+                res["id"] = row["id_from"]
                 res["query_type"] = "Concept"
                 res["relation"] = "co-hyponym"
                 res["related_words"] = cohyponym_titles
@@ -308,8 +311,8 @@ def turn_into_instructions(
             res: Dict = {}
             rel_meta: Dict = {}
 
-            if rel["query"].lower() in meta:
-                rel_meta = res["meta"] = meta[rel["query"].lower()]
+            if rel["id"] in meta:
+                rel_meta = res["meta"] = meta[rel["id"]]
 
             res["instruction"] = render_template(
                 anchor_word=rel["query"],
@@ -370,7 +373,7 @@ if __name__ == "__main__":
 
     wn_titles_dict: pd.DataFrame = load_titles(pathlib.Path(cli_args.input_path))
     if cli_args.meta_path:
-        with open(cli_args.meta_path) as fp_in:
+        with open(cli_args.meta_path, encoding="utf-8") as fp_in:
             meta_dict = json.load(fp_in)
     else:
         meta_dict = None
