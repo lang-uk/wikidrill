@@ -12,8 +12,7 @@ from more_itertools import unique_everseen
 from utils import get_hypernyms, get_hyponyms, get_cohyponyms, get_instance_hyponyms
 
 
-env = jinja2.Environment(autoescape=True)
-
+env = jinja2.Environment(autoescape=False)
 seed(42)
 
 
