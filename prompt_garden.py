@@ -30,6 +30,19 @@ def num_to_str_jinja_filter(input: int) -> str:
         7: "сім",
         8: "вісім",
         9: "дев'ять",
+        10: "десять",
+        11: "одинадцять",
+        12: "дванадцять",
+        13: "тринадцять",
+        14: "чотирнадцять",
+        15: "п'ятнадцять",
+        16: "шістнадцять",
+        17: "сімнадцять",
+        18: "вісімнадцять",
+        19: "дев'ятнадцять",
+        20: "двадцять",
+        21: "двадцять один",
+        22: "двадцять два",
     }.get(input, "багато")
 
 
@@ -174,7 +187,7 @@ def load_titles(fname: pathlib.Path) -> pd.DataFrame:
     return filtered_uk
 
 
-def get_titles(wn_dict: pd.DataFrame, titles: List[str]) -> pd.DataFrame:
+def get_titles(wn_dict: pd.DataFrame, titles: List[str]) -> List[List[str]]:
     """
     Get translated titles from the dictionary.
     """
@@ -183,7 +196,8 @@ def get_titles(wn_dict: pd.DataFrame, titles: List[str]) -> pd.DataFrame:
         .reindex(titles)["title"]
         .dropna()
         .drop_duplicates()
-        .tolist()
+        .reset_index()
+        .values.tolist()
     )
 
 
@@ -310,18 +324,36 @@ def turn_into_instructions(
             res: Dict = {}
             rel_meta: Dict = {}
 
+            related_words = rel["related_words"]
+
             if rel["id"] in meta:
                 rel_meta = res["meta"] = meta[rel["id"]]
+                related_words = []
+
+                if rel_meta["dataset"] == "test":
+                    inverse_split_classes: List[str] = ["training", "trial"]
+                else:
+                    inverse_split_classes = ["test"]
+
+                for rw in rel["related_words"]:
+                    if meta.get(rw[0], {}).get("dataset", None) in inverse_split_classes:
+                        pass
+                        # print(
+                        #     f"Skipping {rw[1]} ({rw[0]}) because for the instruction on "
+                        #     + f"{rel['query']} ({rel['id']}) it is in the training set"
+                        # )
+                    else:
+                        related_words.append(rw)
 
             res["instruction"] = render_template(
                 anchor_word=rel["query"],
-                related_words=rel["related_words"],
+                related_words=related_words,
                 template=rel_template,
                 rel_meta=rel_meta,
             )
             res["input"] = ""
-            shuffle(rel["related_words"])
-            res["output"] = ", ".join(rel["related_words"])
+            shuffle(related_words)
+            res["output"] = ", ".join(rw[1] for rw in related_words)
 
             instructions.append(res)
 
