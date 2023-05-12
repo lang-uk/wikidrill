@@ -132,4 +132,4 @@ dmypy.json
 *.bz2
 
 data
-trees_path/trees
+gap_ranking/trees

@@ -3,7 +3,7 @@ import pandas as pd
 import wn
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from utils import merge_csv, title_by_url
+from utils import merge_sv, title_by_url
 import os
 import shutil
 
@@ -46,5 +46,5 @@ if __name__ == "__main__":
 
     # merge and clean-up
     header = ["id_from", "id_to", "rel", "title"]
-    merge_csv("titled", "data/titled_pwn", header, ";")
+    merge_sv("titled", "data/titled_pwn", header, ";", "csv")
     shutil.rmtree(path_dir)
