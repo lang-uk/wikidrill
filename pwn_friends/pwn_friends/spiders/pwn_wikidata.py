@@ -47,6 +47,7 @@ class PwnWikidataSpider(scrapy.Spider):
         "wikidata.org",
         "wordnet-rdf.princeton.edu",
         "query.wikidata.org",
+        "en-word.net",
     ]
     start_urls = ["http://wikidata.org/"]
 
