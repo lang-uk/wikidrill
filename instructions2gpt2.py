@@ -12,17 +12,9 @@ def generate_prompt(data_point: Dict) -> str:
     :return: A prompt for GPT-2.
     """
     if data_point["input"]:
-        return f"""### Інструкція:
-{data_point["instruction"].strip()}
-### Вхідні дані:
-{data_point["input"].strip()}
-### Відповідь:
-{data_point["output"].strip()}"""
+        return f"""{data_point["instruction"].strip().replace('"', "")}, Вхідні дані: {data_point["input"].strip().replace('"', "")} : {data_point["output"].strip()}"""
     else:
-        return f"""### Інструкція:
-{data_point["instruction"].strip()}
-### Відповідь:
-{data_point["output"].strip()}"""
+        return f"""{data_point["instruction"].strip().replace('"', "")} : {data_point["output"].strip()}"""
 
 
 if __name__ == "__main__":

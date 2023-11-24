@@ -95,6 +95,7 @@ def render_template(
 
 TEMPLATES: Dict[str, List[str]] = {
     "hypernyms": [
+        # "{{ related_words_len|num_to_str }} {{ related_words_len|ukr_plural('гіперонім,гіпероніма,гіперонімів') }} до {{ anchor_word }}",
         "Згенеруй мені {{ related_words_len|num_to_str }} "
         '{{ related_words_len|ukr_plural("гіперонім,гіпероніма,гіперонімів") }} до слова "{{ anchor_word }}".',
         "Запропонуй мені {{ related_words_len|num_to_str }} "
@@ -118,6 +119,7 @@ TEMPLATES: Dict[str, List[str]] = {
         'Чи є ще слова, що належать до більш широкої категорії, ніж "{{ anchor_word }}"?',
     ],
     "co-hyponyms": [
+        # "{{ related_words_len|num_to_str }} {{ related_words_len|ukr_plural('когіпонім,когіпоніма,когіпонімів') }} до {{ anchor_word }}",
         "Згенеруй мені {{ related_words_len|num_to_str }} "
         '{{ related_words_len|ukr_plural("когіпонім,когіпоніма,когіпонімів") }} до слова "{{ anchor_word }}".',
         "Запропонуй мені {{ related_words_len|num_to_str }} "
@@ -135,22 +137,23 @@ TEMPLATES: Dict[str, List[str]] = {
         'Які ще слова є частиною загального поняття, до якого належить "{{ anchor_word }}"?',
     ],
     "hyponyms": [
+        # "{{ related_words_len|num_to_str }} {{ related_words_len|ukr_plural('гіпонім,гіпоніма,гіпонімів') }} до {{ anchor_word }}",
         "Згенеруй {{ related_words_len|num_to_str }} "
         '{{ related_words_len|ukr_plural("гіпонім,гіпоніма,гіпонімів") }} до слова "{{ anchor_word }}".',
         "Запропонуй мені {{ related_words_len|num_to_str }} "
         '{{ related_words_len|ukr_plural("гіпонім,гіпоніма,гіпонімів") }} до поняття "{{ anchor_word }}".',
-        'Запропонуй гіпоніми до слова-гіпероніма "{{ anchor_word }}',
-        'Які слова належать до гіпонімів "{{ anchor_word }}?',
-        'Які поняття є більш конкретними, ніж "{{ anchor_word }}?',
-        'Які інші терміни можуть бути використані, щоб позначити деталізацію поняття "{{ anchor_word }}?',
-        'Які ще слова можна використовувати, щоб позначити менші елементи в рамках поняття "{{ anchor_word }}?',
-        'Які інші слова належать до гіпонімів поняття "{{ anchor_word }}?',
-        'Які терміни використовуються, щоб позначити детальніші елементи "{{ anchor_word }}?',
-        'Які інші терміни можна використовувати, щоб описати елементи "{{ anchor_word }} більш докладно?',
-        'Які є інші слова, які вказують на більш конкретні підкатегорії "{{ anchor_word }}?',
-        'Чи є ще слова, що належать до гіпонімів поняття "{{ anchor_word }}?',
-        'Які інші терміни використовуються, щоб позначити детальніші елементи, які складають "{{ anchor_word }}?',
-        'Які ще слова вказують на більш конкретні підкатегорії, що входять до "{{ anchor_word }}?',
+        'Запропонуй гіпоніми до слова-гіпероніма "{{ anchor_word }}"',
+        'Які слова належать до гіпонімів "{{ anchor_word }}"?',
+        'Які поняття є більш конкретними, ніж "{{ anchor_word }}"?',
+        'Які інші терміни можуть бути використані, щоб позначити деталізацію поняття "{{ anchor_word }}"?',
+        'Які ще слова можна використовувати, щоб позначити менші елементи в рамках поняття "{{ anchor_word }}"?',
+        'Які інші слова належать до гіпонімів поняття "{{ anchor_word }}"?',
+        'Які терміни використовуються, щоб позначити детальніші елементи "{{ anchor_word }}"?',
+        'Які інші терміни можна використовувати, щоб описати елементи "{{ anchor_word }}" більш докладно?',
+        'Які є інші слова, які вказують на більш конкретні підкатегорії "{{ anchor_word }}"?',
+        'Чи є ще слова, що належать до гіпонімів поняття "{{ anchor_word }}"?',
+        'Які інші терміни використовуються, щоб позначити детальніші елементи, які складають "{{ anchor_word }}"?',
+        'Які ще слова вказують на більш конкретні підкатегорії, що входять до "{{ anchor_word }}"?',
     ],
 }
 
@@ -300,6 +303,8 @@ def turn_into_instructions(
     rel_type: str,
     strategy: Literal["all", "random", "first"] = "all",
     meta: Optional[Dict] = None,
+    shuffle_words: bool = False,
+    limit: Optional[int] = None,
 ) -> List[Dict]:
     """
     Turn relations into instructions.
@@ -307,6 +312,8 @@ def turn_into_instructions(
     rel_type: str - type of the relation (hypernym, hyponym, co-hyponym)
     strategy: str - strategy for choosing the template (all, random, first)
     meta: Dict - dictionary of meta information for the anchor words in the task, used for the enrichment
+    shuffle_words: bool - whether to shuffle the related words
+    limit: int - limit the number of related words to use
     """
     instructions: List[Dict] = []
     if meta is None:
@@ -345,6 +352,9 @@ def turn_into_instructions(
                     else:
                         related_words.append(rw)
 
+            if limit:
+                related_words = related_words[:limit]
+
             res["instruction"] = render_template(
                 anchor_word=rel["query"],
                 related_words=related_words,
@@ -352,7 +362,9 @@ def turn_into_instructions(
                 rel_meta=rel_meta,
             )
             res["input"] = ""
-            shuffle(related_words)
+            if shuffle_words:
+                shuffle(related_words)
+
             res["output"] = ", ".join(rw[1] for rw in related_words)
 
             instructions.append(res)
@@ -392,6 +404,18 @@ if __name__ == "__main__":
         type=pathlib.Path,
         help="Path to the file with meta information for the anchor words",
     )
+    parser.add_argument(
+        "--shuffle-related-words",
+        help="Whether to shuffle the related words",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--limit-related-words",
+        type=int,
+        help="Limit the number of related words",
+        default=10,
+    )
     cli_args = parser.parse_args()
 
     rel_type_task: Dict[str, Callable] = {
@@ -416,5 +440,7 @@ if __name__ == "__main__":
                 rel_type,
                 strategy=cli_args.strategy,
                 meta=meta_dict,
+                shuffle_words=cli_args.shuffle_related_words,
+                limit=cli_args.limit_related_words,
             ):
                 fp_out.write(json.dumps(instruction, ensure_ascii=False) + "\n")
