@@ -22,25 +22,27 @@ def title_by_url(url):
     return page_title
 
 
-def merge_csv(folder_name, out_file, header_list, delimiter):
+def merge_sv(folder_name, out_file, header_list, delimiter, typ):
     """
     Merge multiple csv files
     :param folder_name: string
     :param out_file: string
     :param header_list: list
     :param delimiter: string
+    :param typ: string
     :return: None
     """
-    files = os.path.join(f"./{folder_name}/", "*.csv")
+    files = os.path.join(f"./{folder_name}/", f"*.{typ}")
     files = glob.glob(files)
     files.sort()
-    with open(f"./{out_file}.csv", "w") as file_out:
+    with open(f"./{out_file}.{typ}", "w") as file_out:
         writer = csv.writer(file_out, delimiter=delimiter)
         writer.writerow(header_list)
         for filename in tqdm(files):
             with open(filename, "r") as f_out:
-                line = [list(elem.strip().split(";")) for elem in f_out]
+                line = [list(elem.strip().split(delimiter)) for elem in f_out]
                 writer.writerows(line)
+
 
 @cache
 def get_hyponyms(synset_id: str) -> List[str]:
@@ -60,6 +62,7 @@ def get_hyponyms(synset_id: str) -> List[str]:
         return []
     return [el.id for el in rels["hyponym"]]
 
+
 @cache
 def get_instance_hyponyms(synset_id: str) -> List[str]:
     """
@@ -77,6 +80,7 @@ def get_instance_hyponyms(synset_id: str) -> List[str]:
         return []
 
     return [el.id for el in wn.synset(synset_id).relations()["instance_hyponym"]]
+
 
 @cache
 def get_hypernyms(synset_id: str) -> Tuple[List[str], Optional[str]]:
@@ -97,6 +101,7 @@ def get_hypernyms(synset_id: str) -> Tuple[List[str], Optional[str]]:
     if "instance_hypernym" in rels:
         return [el.id for el in rels["instance_hypernym"]], "Entity"
     return [], None
+
 
 @cache
 def get_cohyponyms(synset_id: str) -> List[str]:

@@ -224,7 +224,7 @@ if __name__ == "__main__":
             data.append(file_data)
 
     # Write the merged data to a new file
-    with open("../path_with_gaps.json", "w") as f:
+    with open("./path_with_gaps.json", "w") as f:
         json.dump(data, f, ensure_ascii=False)
 
     shutil.rmtree(path_dir_stats)
