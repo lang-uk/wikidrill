@@ -33,7 +33,8 @@ SELECT ?item ?itemLabel ?en_wiki ?uk_wiki ?pl_wiki ?ru_wiki WHERE {{
     }}
 }}"""
 
-PWN_URL = "https://en-word.net/json/id/oewn-{pwn_id}"
+SYNSET_ID_PREFIX = "oewn"
+PWN_URL = "https://en-word.net/json/id/{SYNSET_ID_PREFIX}-{pwn_id}"
 LEXICON = "omw-en31"
 WIKIDATA_URL = "https://query.wikidata.org/sparql"
 
@@ -54,7 +55,10 @@ class PwnWikidataSpider(scrapy.Spider):
     def start_requests(self):
         for wn_synset in wn.synsets(lexicon=LEXICON):
             yield scrapy.Request(
-                PWN_URL.format(pwn_id=wn_synset.id.replace(f"{LEXICON}-", "")),
+                PWN_URL.format(
+                    pwn_id=wn_synset.id.replace(f"{LEXICON}-", ""),
+                    SYNSET_ID_PREFIX=SYNSET_ID_PREFIX,
+                ),
                 callback=self.parse_pwn,
             )
 
@@ -90,7 +94,8 @@ class PwnWikidataSpider(scrapy.Spider):
                 method="GET",
                 formdata={
                     "query": WIKIDATA_QUERY.format(
-                        prop_name=PWN31_WD_PROP, prop_value=synset["id"]
+                        prop_name=PWN31_WD_PROP,
+                        prop_value=synset["id"].replace(f"{SYNSET_ID_PREFIX}-", ""),
                     )
                 },
                 headers={"Accept": "application/sparql-results+json"},
